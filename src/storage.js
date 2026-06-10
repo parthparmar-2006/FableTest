@@ -19,13 +19,49 @@ function write(key, value) {
   }
 }
 
+export function todayStr(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+
 export const Storage = {
   getBest: () => read('jos_best', 0),
   setBest: (v) => write('jos_best', v),
+
   getStardust: () => read('jos_stardust', 0),
   addStardust: (v) => {
     const total = read('jos_stardust', 0) + v;
     write('jos_stardust', total);
     return total;
   },
+  spendStardust(v) {
+    const cur = read('jos_stardust', 0);
+    if (cur < v) return false;
+    write('jos_stardust', cur - v);
+    return true;
+  },
+
+  // collection album
+  getOwnedSkins: () => read('jos_skins', ['classic']),
+  ownSkin(id) {
+    const owned = read('jos_skins', ['classic']);
+    if (!owned.includes(id)) owned.push(id);
+    write('jos_skins', owned);
+  },
+  getEquippedSkin: () => read('jos_equipped', 'classic'),
+  setEquippedSkin: (id) => write('jos_equipped', id),
+
+  // daily streak: { count, last, freezes }; freeze auto-covers one missed day
+  getStreak: () => read('jos_streak', { count: 0, last: null, freezes: 1 }),
+  setStreak: (s) => write('jos_streak', s),
+  getLastClaim: () => read('jos_lastclaim', null),
+  setLastClaim: (day) => write('jos_lastclaim', day),
+
+  // daily challenge best, keyed by date
+  getDailyBest: (day) => read('jos_daily_' + day, 0),
+  setDailyBest: (day, v) => write('jos_daily_' + day, v),
+
+  getMuted: () => read('jos_muted', false),
+  setMuted: (v) => write('jos_muted', v),
 };

@@ -1,8 +1,21 @@
 import Phaser from 'phaser';
 import { GAME_WIDTH, GAME_HEIGHT } from '../constants.js';
 import { TIERS, MAX_DROP_TIER, DROP_WEIGHTS } from '../config/tiers.js';
-import { Storage } from '../storage.js';
+import { Storage, todayStr } from '../storage.js';
+import { skinById } from '../config/skins.js';
+import { Sfx } from '../sfx.js';
 import { sprinkleStars } from './MenuScene.js';
+
+// deterministic RNG so every player gets the same daily-challenge drop order
+function mulberry32(seed) {
+  return function () {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 const JAR = {
   left: 48,
@@ -20,7 +33,20 @@ export default class GameScene extends Phaser.Scene {
     super('Game');
   }
 
+  init(data) {
+    this.isDaily = !!data?.daily;
+    if (this.isDaily) {
+      const day = todayStr();
+      let seed = 0;
+      for (const ch of day) seed = (seed * 31 + ch.charCodeAt(0)) | 0;
+      this.rand = mulberry32(seed);
+    } else {
+      this.rand = Math.random;
+    }
+  }
+
   create() {
+    this.palette = skinById(Storage.getEquippedSkin()).palette;
     this.score = 0;
     this.merges = 0;
     this.highestTier = 0;
@@ -58,6 +84,13 @@ export default class GameScene extends Phaser.Scene {
     this.add.text(GAME_WIDTH - 16, 14, 'NEXT', {
       fontFamily: 'Arial, sans-serif', fontSize: '14px', color: '#9aa7c7',
     }).setOrigin(1, 0);
+    if (this.isDaily) {
+      this.add
+        .text(GAME_WIDTH / 2, 24, `DAILY · ${todayStr()}`, {
+          fontFamily: 'Arial, sans-serif', fontSize: '15px', color: '#ffd54f',
+        })
+        .setOrigin(0.5);
+    }
     this.chainText = this.add
       .text(GAME_WIDTH / 2, 300, '', {
         fontFamily: 'Arial Black, sans-serif', fontSize: '34px', color: '#ffd54f',
@@ -92,15 +125,19 @@ export default class GameScene extends Phaser.Scene {
       JAR.left - JAR.wall, JAR.top, JAR.right - JAR.left + JAR.wall * 2,
       JAR.floor - JAR.top + JAR.wall
     );
+    // dashed red line reads as "threat" even at rest (week-1 finding: solid
+    // 0.25-alpha line was invisible behind the jar stroke)
     this.dangerLine = this.add.graphics();
-    this.dangerLine.lineStyle(2, 0xef5350, 0.7);
-    this.dangerLine.lineBetween(JAR.left, JAR.top, JAR.right, JAR.top);
-    this.dangerLine.setAlpha(0.25);
+    this.dangerLine.lineStyle(3, 0xef5350, 1);
+    for (let dx = JAR.left; dx < JAR.right; dx += 24) {
+      this.dangerLine.lineBetween(dx, JAR.top, Math.min(dx + 14, JAR.right), JAR.top);
+    }
+    this.dangerLine.setAlpha(0.55);
   }
 
   rollTier() {
     const total = DROP_WEIGHTS.reduce((a, b) => a + b, 0);
-    let roll = Phaser.Math.Between(1, total);
+    let roll = Math.floor(this.rand() * total) + 1;
     for (let i = 0; i <= MAX_DROP_TIER; i++) {
       roll -= DROP_WEIGHTS[i];
       if (roll <= 0) return i;
@@ -134,6 +171,7 @@ export default class GameScene extends Phaser.Scene {
     this.held.destroy();
     this.held = null;
     this.canDrop = false;
+    Sfx.drop();
     // short cooldown keeps "one more drop" rhythm without spam-stacking at the line
     this.time.delayedCall(450, () => {
       if (this.gameOver) return;
@@ -190,6 +228,7 @@ export default class GameScene extends Phaser.Scene {
     this.score += points;
     this.scoreText.setText(`Score: ${this.score}`);
 
+    Sfx.merge(next, this.chainCount);
     this.juice(nx, ny, next);
     if (this.chainCount >= 2) this.showChain(this.chainCount);
   }
@@ -200,7 +239,7 @@ export default class GameScene extends Phaser.Scene {
       scale: { start: 0.9, end: 0 },
       lifespan: 450,
       quantity: 8 + tier * 3,
-      tint: TIERS[tier].color,
+      tint: this.palette[tier],
       emitting: false,
     });
     emitter.explode();
@@ -250,7 +289,7 @@ export default class GameScene extends Phaser.Scene {
       if (this.dangerTimer >= DANGER_SECONDS) this.endGame();
     } else {
       this.dangerTimer = 0;
-      this.dangerLine.setAlpha(0.25);
+      this.dangerLine.setAlpha(0.55);
     }
   }
 
@@ -258,12 +297,18 @@ export default class GameScene extends Phaser.Scene {
     this.gameOver = true;
     this.matter.world.setGravity(0, 1);
     this.cameras.main.flash(400, 239, 83, 80);
+    Sfx.over();
 
     const best = Storage.getBest();
     const isNewBest = this.score > best;
     if (isNewBest) Storage.setBest(this.score);
     const stardust = Math.floor(this.score / 10);
     const stardustTotal = Storage.addStardust(stardust);
+
+    const day = todayStr();
+    if (this.isDaily && this.score > Storage.getDailyBest(day)) {
+      Storage.setDailyBest(day, this.score);
+    }
 
     this.time.delayedCall(500, () =>
       this.scene.start('GameOver', {
@@ -273,6 +318,8 @@ export default class GameScene extends Phaser.Scene {
         highestTier: this.highestTier,
         stardust,
         stardustTotal,
+        isDaily: this.isDaily,
+        day,
       })
     );
   }

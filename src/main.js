@@ -4,6 +4,7 @@ import BootScene from './scenes/BootScene.js';
 import MenuScene from './scenes/MenuScene.js';
 import GameScene from './scenes/GameScene.js';
 import GameOverScene from './scenes/GameOverScene.js';
+import AlbumScene from './scenes/AlbumScene.js';
 
 const game = new Phaser.Game({
   type: Phaser.AUTO,
@@ -22,7 +23,7 @@ const game = new Phaser.Game({
       enableSleeping: true,
     },
   },
-  scene: [BootScene, MenuScene, GameScene, GameOverScene],
+  scene: [BootScene, MenuScene, GameScene, GameOverScene, AlbumScene],
 });
 
 // test/debug handle (also used by automated verification)
