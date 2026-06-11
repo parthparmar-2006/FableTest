@@ -6,7 +6,16 @@ import GameScene from './scenes/GameScene.js';
 import GameOverScene from './scenes/GameOverScene.js';
 import AlbumScene from './scenes/AlbumScene.js';
 
-const game = new Phaser.Game({
+async function boot() {
+  // make sure the bundled font is usable before any text renders
+  try {
+    await document.fonts.load('800 32px "Baloo 2"');
+    await document.fonts.load('600 18px "Baloo 2"');
+  } catch {
+    // fall back silently to the system stack
+  }
+
+  const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: 'game',
   width: GAME_WIDTH,
@@ -23,8 +32,11 @@ const game = new Phaser.Game({
       enableSleeping: true,
     },
   },
-  scene: [BootScene, MenuScene, GameScene, GameOverScene, AlbumScene],
-});
+    scene: [BootScene, MenuScene, GameScene, GameOverScene, AlbumScene],
+  });
 
-// test/debug handle (also used by automated verification)
-window.__JOS = game;
+  // test/debug handle (also used by automated verification)
+  window.__JOS = game;
+}
+
+boot();

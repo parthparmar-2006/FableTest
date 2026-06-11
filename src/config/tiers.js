@@ -16,5 +16,13 @@ export const TIERS = [
 // Only small bodies spawn as droppables (classic Suika rule): big ones must be earned.
 export const MAX_DROP_TIER = 4;
 
-// Weighted toward the smallest pieces so the first minutes stay nearly loss-proof.
-export const DROP_WEIGHTS = [5, 4, 3, 2, 1];
+// Escalating drop weights: stage advances every ESCALATION_DROPS drops, shifting
+// odds toward bigger pieces so runs end in 2-4 minutes instead of dragging on.
+// Stage 0 keeps the first minute nearly loss-proof.
+export const DROP_STAGES = [
+  [5, 4, 3, 2, 1],
+  [4, 4, 3, 3, 2],
+  [3, 3, 4, 3, 3],
+  [2, 3, 4, 4, 3],
+];
+export const ESCALATION_DROPS = 15;

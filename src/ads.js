@@ -31,15 +31,41 @@ const state = {
   lastRewardedAt: 0,
   native: false,
   admob: null,
+  rewardedReady: false,
+  rewardEarned: false,
 };
+
+const AD_TIMEOUT_MS = 8000;
+
+// An unresolved ad promise must never hang the game (seen on-device with the
+// SAVE ME overlay): every native ad call races this timeout.
+function withTimeout(promise, ms = AD_TIMEOUT_MS) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve('__timeout__'), ms)),
+  ]);
+}
 
 async function initNative() {
   // Capacitor is only present in the wrapped Android app
   const cap = window.Capacitor;
   if (!cap?.isNativePlatform?.()) return;
   try {
-    const { AdMob } = await import('@capacitor-community/admob');
-    await AdMob.initialize({ initializeForTesting: true });
+    const mod = await import('@capacitor-community/admob');
+    const AdMob = mod.AdMob;
+    await withTimeout(AdMob.initialize({ initializeForTesting: true }));
+    // trust plugin events over show-promise resolution for the reward signal
+    const ev = mod.RewardAdPluginEvents ?? {};
+    if (ev.Rewarded) {
+      AdMob.addListener(ev.Rewarded, () => {
+        state.rewardEarned = true;
+      });
+    }
+    if (ev.FailedToLoad) {
+      AdMob.addListener(ev.FailedToLoad, () => {
+        state.rewardedReady = false;
+      });
+    }
     state.admob = AdMob;
     state.native = true;
   } catch (e) {
@@ -64,8 +90,12 @@ export const Ads = {
     if (!interstitialAllowed()) return false;
     if (!state.native) return false; // web build: no interstitials at all
     try {
-      await state.admob.prepareInterstitial({ adId: TEST_UNITS.interstitial });
-      await state.admob.showInterstitial();
+      const r1 = await withTimeout(
+        state.admob.prepareInterstitial({ adId: TEST_UNITS.interstitial })
+      );
+      if (r1 === '__timeout__') return false;
+      const r2 = await withTimeout(state.admob.showInterstitial());
+      if (r2 === '__timeout__') return false;
       state.lastInterstitialAt = Date.now();
       state.interstitialCount += 1;
       track('ad_interstitial');
@@ -75,14 +105,37 @@ export const Ads = {
     }
   },
 
-  /** Opt-in rewarded ad. Resolves true only if the reward was earned. */
+  /** Call at run start so SAVE ME shows instantly instead of loading at fail time. */
+  async preloadRewarded() {
+    if (!state.native || state.rewardedReady) return;
+    try {
+      const r = await withTimeout(
+        state.admob.prepareRewardVideoAd({ adId: TEST_UNITS.rewarded })
+      );
+      state.rewardedReady = r !== '__timeout__';
+    } catch {
+      state.rewardedReady = false;
+    }
+  },
+
+  /** Opt-in rewarded ad. Resolves true only if the reward was earned. Never hangs. */
   async showRewarded(placement) {
     track('ad_rewarded_open', placement);
     if (state.native) {
       try {
-        await state.admob.prepareRewardVideoAd({ adId: TEST_UNITS.rewarded });
-        const result = await state.admob.showRewardVideoAd();
-        const earned = !!result;
+        state.rewardEarned = false;
+        if (!state.rewardedReady) {
+          const p = await withTimeout(
+            state.admob.prepareRewardVideoAd({ adId: TEST_UNITS.rewarded })
+          );
+          if (p === '__timeout__') return false;
+        }
+        state.rewardedReady = false; // consumed; next run preloads again
+        const result = await withTimeout(
+          state.admob.showRewardVideoAd(),
+          AD_TIMEOUT_MS * 4 // the video itself runs ~30s; only guard real hangs
+        );
+        const earned = state.rewardEarned || (result !== '__timeout__' && !!result);
         if (earned) state.lastRewardedAt = Date.now();
         track(earned ? 'ad_rewarded_earned' : 'ad_rewarded_abandoned', placement);
         return earned;

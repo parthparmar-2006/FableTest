@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { GAME_WIDTH } from '../constants.js';
+import { GAME_WIDTH, FONT } from '../constants.js';
 import { SKINS, skinById } from '../config/skins.js';
 import { Storage } from '../storage.js';
 import { Sfx } from '../sfx.js';
@@ -19,19 +19,19 @@ export default class AlbumScene extends Phaser.Scene {
 
     this.add
       .text(GAME_WIDTH / 2, 50, 'COLLECTION', {
-        fontFamily: 'Arial Black, sans-serif', fontSize: '34px', color: '#ce93d8',
+        fontFamily: FONT, fontStyle: 'bold', fontSize: '34px', color: '#ce93d8',
       })
       .setOrigin(0.5);
 
     this.dustText = this.add
       .text(GAME_WIDTH / 2, 92, `✦ ${Storage.getStardust()}`, {
-        fontFamily: 'Arial, sans-serif', fontSize: '20px', color: '#ffd54f',
+        fontFamily: FONT, fontSize: '20px', color: '#ffd54f',
       })
       .setOrigin(0.5);
 
     this.toast = this.add
       .text(GAME_WIDTH / 2, 122, '', {
-        fontFamily: 'Arial, sans-serif', fontSize: '16px', color: '#ef9a9a',
+        fontFamily: FONT, fontSize: '16px', color: '#ef9a9a',
       })
       .setOrigin(0.5);
 
@@ -66,7 +66,7 @@ export default class AlbumScene extends Phaser.Scene {
 
     this.add
       .text(x, y + 8, skin.name, {
-        fontFamily: 'Arial, sans-serif', fontSize: '15px', color: '#ffffff',
+        fontFamily: FONT, fontSize: '15px', color: '#ffffff',
       })
       .setOrigin(0.5);
 
@@ -77,7 +77,7 @@ export default class AlbumScene extends Phaser.Scene {
         : `✦ ${skin.cost}`;
     this.add
       .text(x, y + 30, status, {
-        fontFamily: 'Arial, sans-serif',
+        fontFamily: FONT,
         fontSize: '14px',
         color: equipped ? '#ffd54f' : owned ? '#80deea' : '#9aa7c7',
       })

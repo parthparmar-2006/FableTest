@@ -1,33 +1,27 @@
 import Phaser from 'phaser';
-import { GAME_WIDTH, GAME_HEIGHT } from '../constants.js';
-import { TIERS, MAX_DROP_TIER, DROP_WEIGHTS } from '../config/tiers.js';
+import { GAME_WIDTH, GAME_HEIGHT, FONT } from '../constants.js';
+import { TIERS, MAX_DROP_TIER, DROP_STAGES, ESCALATION_DROPS } from '../config/tiers.js';
 import { Storage, todayStr } from '../storage.js';
 import { skinById } from '../config/skins.js';
-import { Sfx } from '../sfx.js';
+import { Sfx, Music } from '../sfx.js';
 import { Ads, track } from '../ads.js';
+import { mulberry32, daySeed, recordRun, addXp, boxEarnedThisRun } from '../progression.js';
 import { sprinkleStars } from './MenuScene.js';
 
-// deterministic RNG so every player gets the same daily-challenge drop order
-function mulberry32(seed) {
-  return function () {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 const JAR = {
-  left: 48,
-  right: GAME_WIDTH - 48,
-  floor: GAME_HEIGHT - 46,
-  top: 200, // wall tops / overflow line
+  left: 66,
+  right: GAME_WIDTH - 66,
+  floor: GAME_HEIGHT - 76,
+  top: 200, // overflow line
   wall: 14,
 };
 const DROP_Y = 120;
-const DANGER_SECONDS = 2.5; // settled above the line this long = game over
+const DANGER_SECONDS = 2.0; // settled above the line this long = game over
 const CHAIN_WINDOW_MS = 1200;
+const DROP_COOLDOWN_MS = 400;
+
+// gravity storm pacing (seconds)
+const STORM = { first: 40, gapMin: 35, gapMax: 50, warn: 3, length: 6 };
 
 export default class GameScene extends Phaser.Scene {
   constructor() {
@@ -36,14 +30,7 @@ export default class GameScene extends Phaser.Scene {
 
   init(data) {
     this.isDaily = !!data?.daily;
-    if (this.isDaily) {
-      const day = todayStr();
-      let seed = 0;
-      for (const ch of day) seed = (seed * 31 + ch.charCodeAt(0)) | 0;
-      this.rand = mulberry32(seed);
-    } else {
-      this.rand = Math.random;
-    }
+    this.rand = this.isDaily ? mulberry32(daySeed(todayStr())) : Math.random;
   }
 
   create() {
@@ -52,59 +39,78 @@ export default class GameScene extends Phaser.Scene {
     this.palette = skinById(Storage.getEquippedSkin()).palette;
     this.score = 0;
     this.merges = 0;
+    this.dropCount = 0;
     this.highestTier = 0;
     this.chainCount = 0;
+    this.maxChain = 0;
     this.lastMergeAt = 0;
     this.dangerTimer = 0;
+    this.lastHeartbeat = 0;
     this.gameOver = false;
     this.canDrop = true;
-    this.tiltPhase = 0;
     this.pieces = this.add.group();
+
+    // storms: calm -> warning(3s) -> storm(6s) -> calm
+    this.stormPhase = 'calm';
+    this.stormClock = STORM.first;
+    this.stormsSurvived = 0;
 
     sprinkleStars(this);
     this.drawJar();
 
-    // physics walls
+    // physics walls run from the very top of the screen so pieces can never
+    // enter or leave the jar from the sides (on-device bug: edge drops + drift
+    // could put pieces outside the playfield)
     const opts = { isStatic: true, friction: 0.4 };
-    const wallH = JAR.floor - JAR.top;
     this.matter.add.rectangle(
-      JAR.left - JAR.wall / 2, JAR.top + wallH / 2, JAR.wall, wallH, opts
+      JAR.left - JAR.wall / 2, JAR.floor / 2, JAR.wall, JAR.floor, opts
     );
     this.matter.add.rectangle(
-      JAR.right + JAR.wall / 2, JAR.top + wallH / 2, JAR.wall, wallH, opts
+      JAR.right + JAR.wall / 2, JAR.floor / 2, JAR.wall, JAR.floor, opts
     );
     this.matter.add.rectangle(
       GAME_WIDTH / 2, JAR.floor + JAR.wall / 2, GAME_WIDTH, JAR.wall, opts
     );
+    this.matter.world.setGravity(0, 1);
 
     // HUD
-    this.scoreText = this.add.text(16, 14, 'Score: 0', {
-      fontFamily: 'Arial Black, sans-serif', fontSize: '24px', color: '#ffffff',
+    this.scoreText = this.add.text(16, 12, 'Score: 0', {
+      fontFamily: FONT, fontStyle: 'bold', fontSize: '26px', color: '#ffffff',
     });
-    this.add.text(16, 46, `Best: ${Storage.getBest()}`, {
-      fontFamily: 'Arial, sans-serif', fontSize: '16px', color: '#9aa7c7',
+    this.add.text(16, 44, `Best: ${Storage.getBest()}`, {
+      fontFamily: FONT, fontSize: '16px', color: '#9aa7c7',
     });
-    this.add.text(GAME_WIDTH - 16, 14, 'NEXT', {
-      fontFamily: 'Arial, sans-serif', fontSize: '14px', color: '#9aa7c7',
+    // escalation "pressure" pips
+    this.pips = [];
+    for (let i = 0; i < DROP_STAGES.length - 1; i++) {
+      this.pips.push(
+        this.add.circle(22 + i * 18, 78, 5, 0x4a5580).setAlpha(0.6)
+      );
+    }
+    this.add.text(GAME_WIDTH - 16, 12, 'NEXT', {
+      fontFamily: FONT, fontSize: '14px', color: '#9aa7c7',
     }).setOrigin(1, 0);
     if (this.isDaily) {
       this.add
-        .text(GAME_WIDTH / 2, 24, `DAILY · ${todayStr()}`, {
-          fontFamily: 'Arial, sans-serif', fontSize: '15px', color: '#ffd54f',
+        .text(GAME_WIDTH / 2, 22, `DAILY · ${todayStr()}`, {
+          fontFamily: FONT, fontSize: '15px', color: '#ffd54f',
         })
         .setOrigin(0.5);
     }
     this.chainText = this.add
       .text(GAME_WIDTH / 2, 300, '', {
-        fontFamily: 'Arial Black, sans-serif', fontSize: '34px', color: '#ffd54f',
+        fontFamily: FONT, fontStyle: 'bold', fontSize: '36px', color: '#ffd54f',
       })
       .setOrigin(0.5)
       .setAlpha(0);
 
-    // gravity/tilt indicator
-    this.tiltArrow = this.add
-      .text(GAME_WIDTH / 2, 60, '⬇', { fontSize: '28px', color: '#80deea' })
-      .setOrigin(0.5);
+    // storm banner (hidden while calm)
+    this.stormText = this.add
+      .text(GAME_WIDTH / 2, 60, '', {
+        fontFamily: FONT, fontStyle: 'bold', fontSize: '24px', color: '#ef5350',
+      })
+      .setOrigin(0.5)
+      .setAlpha(0);
 
     this.nextTier = this.rollTier();
     this.spawnHeldPiece();
@@ -119,6 +125,9 @@ export default class GameScene extends Phaser.Scene {
         this.tryMerge(pair.bodyA.gameObject, pair.bodyB.gameObject);
       }
     });
+
+    Music.start();
+    Ads.preloadRewarded();
   }
 
   drawJar() {
@@ -128,8 +137,7 @@ export default class GameScene extends Phaser.Scene {
       JAR.left - JAR.wall, JAR.top, JAR.right - JAR.left + JAR.wall * 2,
       JAR.floor - JAR.top + JAR.wall
     );
-    // dashed red line reads as "threat" even at rest (week-1 finding: solid
-    // 0.25-alpha line was invisible behind the jar stroke)
+    // dashed red overflow line
     this.dangerLine = this.add.graphics();
     this.dangerLine.lineStyle(3, 0xef5350, 1);
     for (let dx = JAR.left; dx < JAR.right; dx += 24) {
@@ -138,11 +146,19 @@ export default class GameScene extends Phaser.Scene {
     this.dangerLine.setAlpha(0.55);
   }
 
+  escalationStage() {
+    return Math.min(
+      DROP_STAGES.length - 1,
+      Math.floor(this.dropCount / ESCALATION_DROPS)
+    );
+  }
+
   rollTier() {
-    const total = DROP_WEIGHTS.reduce((a, b) => a + b, 0);
+    const weights = DROP_STAGES[this.escalationStage()];
+    const total = weights.reduce((a, b) => a + b, 0);
     let roll = Math.floor(this.rand() * total) + 1;
     for (let i = 0; i <= MAX_DROP_TIER; i++) {
-      roll -= DROP_WEIGHTS[i];
+      roll -= weights[i];
       if (roll <= 0) return i;
     }
     return 0;
@@ -156,7 +172,7 @@ export default class GameScene extends Phaser.Scene {
       .setAlpha(0.9);
     this.nextPreview?.destroy();
     this.nextPreview = this.add
-      .image(GAME_WIDTH - 40, 64, TIERS[this.nextTier].key)
+      .image(GAME_WIDTH - 40, 62, TIERS[this.nextTier].key)
       .setScale(0.45);
     this.aimAt(this.held.x);
   }
@@ -169,14 +185,17 @@ export default class GameScene extends Phaser.Scene {
 
   drop() {
     if (!this.held || !this.canDrop || this.gameOver) return;
-    const tier = this.currentTier;
-    this.addPiece(this.held.x, DROP_Y, tier);
+    this.addPiece(this.held.x, DROP_Y, this.currentTier);
     this.held.destroy();
     this.held = null;
     this.canDrop = false;
+    this.dropCount++;
+    const stage = this.escalationStage();
+    this.pips.forEach((p, i) =>
+      p.setFillStyle(i < stage ? 0xef5350 : 0x4a5580)
+    );
     Sfx.drop();
-    // short cooldown keeps "one more drop" rhythm without spam-stacking at the line
-    this.time.delayedCall(450, () => {
+    this.time.delayedCall(DROP_COOLDOWN_MS, () => {
       if (this.gameOver) return;
       this.canDrop = true;
       this.spawnHeldPiece();
@@ -192,7 +211,6 @@ export default class GameScene extends Phaser.Scene {
     piece.setData('tier', tier);
     piece.setData('bornAt', this.time.now);
     if (tier === 6) {
-      // decorative ring follows the Ringed Giant
       const ring = this.add.image(x, y, 'ring');
       piece.setData('ring', ring);
     }
@@ -220,9 +238,9 @@ export default class GameScene extends Phaser.Scene {
     const merged = this.addPiece(nx, ny, next);
     merged.setVelocityY(-2);
 
-    // chain bonus: consecutive merges within the window multiply the payout
     const now = this.time.now;
     this.chainCount = now - this.lastMergeAt < CHAIN_WINDOW_MS ? this.chainCount + 1 : 1;
+    this.maxChain = Math.max(this.maxChain, this.chainCount);
     this.lastMergeAt = now;
     this.merges++;
     this.highestTier = Math.max(this.highestTier, next);
@@ -230,6 +248,9 @@ export default class GameScene extends Phaser.Scene {
     const points = Math.round(TIERS[next].score * (1 + 0.5 * (this.chainCount - 1)));
     this.score += points;
     this.scoreText.setText(`Score: ${this.score}`);
+    this.tweens.add({
+      targets: this.scoreText, scale: 1.15, duration: 90, yoyo: true,
+    });
 
     Sfx.merge(next, this.chainCount);
     this.juice(nx, ny, next);
@@ -247,7 +268,6 @@ export default class GameScene extends Phaser.Scene {
     });
     emitter.explode();
     this.time.delayedCall(600, () => emitter.destroy());
-    // escalating screen shake = the shareable chain-reaction drama
     this.cameras.main.shake(120 + tier * 30, 0.002 + tier * 0.0012);
   }
 
@@ -262,17 +282,76 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
+  /* ------------------------- gravity storms ------------------------- */
+
+  updateStorm(dt) {
+    if (this.stormPhase === 'calm') {
+      this.stormClock -= dt;
+      if (this.stormClock <= 0) {
+        this.stormPhase = 'warning';
+        this.stormClock = STORM.warn;
+        this.stormText.setAlpha(1);
+        Sfx.siren();
+      }
+      return;
+    }
+
+    if (this.stormPhase === 'warning') {
+      this.stormClock -= dt;
+      this.stormText.setText(`⚠ GRAVITY STORM IN ${Math.ceil(this.stormClock)}`);
+      this.stormText.setAlpha(0.5 + 0.5 * Math.abs(Math.sin(this.time.now / 150)));
+      if (this.stormClock <= 0) {
+        this.stormPhase = 'storm';
+        this.stormClock = STORM.length;
+        this.stormElapsed = 0;
+        this.stormText.setText('⚠ GRAVITY STORM ⚠');
+        this.wind = this.add.particles(0, 0, 'dot', {
+          x: { min: 0, max: GAME_WIDTH },
+          y: { min: JAR.top, max: JAR.floor },
+          speedX: { min: 150, max: 320 },
+          speedY: 0,
+          scale: { start: 0.5, end: 0 },
+          lifespan: 500,
+          frequency: 35,
+          alpha: 0.5,
+        });
+      }
+      return;
+    }
+
+    // storm phase: strong oscillating tilt, slightly harder late in the run
+    this.stormElapsed += dt;
+    this.stormClock -= dt;
+    const maxTilt = Math.min(14 + this.merges * 0.1, 22);
+    const angle = Math.sin(this.stormElapsed * 3.2) * Phaser.Math.DegToRad(maxTilt);
+    this.matter.world.setGravity(Math.sin(angle), Math.cos(angle));
+    this.cameras.main.setRotation(angle * 0.18);
+    if (this.wind) {
+      this.wind.speedX = angle > 0 ? 250 : -250;
+    }
+    if (this.stormClock <= 0) {
+      this.stormPhase = 'calm';
+      this.stormClock = STORM.gapMin + Math.random() * (STORM.gapMax - STORM.gapMin);
+      this.stormsSurvived++;
+      this.matter.world.setGravity(0, 1);
+      this.cameras.main.setRotation(0);
+      this.wind?.destroy();
+      this.wind = null;
+      this.stormText.setText('storm passed ✓').setColor('#80deea');
+      this.tweens.add({
+        targets: this.stormText, alpha: 0, delay: 1200, duration: 500,
+        onComplete: () => this.stormText.setColor('#ef5350'),
+      });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+
   update(_, deltaMs) {
     if (this.gameOver) return;
     const dt = deltaMs / 1000;
 
-    // THE TWIST: gravity slowly oscillates, tilting the pile. Amplitude grows
-    // with merges so late game gets dramatic while the first minutes stay calm.
-    this.tiltPhase += dt;
-    const maxTiltDeg = Math.min(6 + this.merges * 0.2, 16);
-    const angle = Math.sin(this.tiltPhase * 0.45) * Phaser.Math.DegToRad(maxTiltDeg);
-    this.matter.world.setGravity(Math.sin(angle), Math.cos(angle));
-    this.tiltArrow.setRotation(angle);
+    this.updateStorm(dt);
 
     // overflow check: any settled piece above the line starts the countdown
     let inDanger = false;
@@ -289,6 +368,10 @@ export default class GameScene extends Phaser.Scene {
     if (inDanger) {
       this.dangerTimer += dt;
       this.dangerLine.setAlpha(0.4 + 0.6 * Math.abs(Math.sin(this.time.now / 120)));
+      if (this.time.now - this.lastHeartbeat > 600) {
+        this.lastHeartbeat = this.time.now;
+        Sfx.heartbeat();
+      }
       if (this.dangerTimer >= DANGER_SECONDS) this.endGame();
     } else {
       this.dangerTimer = 0;
@@ -299,6 +382,9 @@ export default class GameScene extends Phaser.Scene {
   endGame() {
     this.gameOver = true;
     this.matter.world.setGravity(0, 1);
+    this.cameras.main.setRotation(0);
+    this.wind?.destroy();
+    this.wind = null;
 
     // one rewarded continue per run: the highest-value ad placement
     if (!this.usedSave && Ads.rewardedAvailable()) {
@@ -312,44 +398,50 @@ export default class GameScene extends Phaser.Scene {
     const cx = GAME_WIDTH / 2;
     const overlay = [
       this.add.rectangle(cx, 400, GAME_WIDTH, GAME_HEIGHT, 0x0b0b1e, 0.75),
-      this.add.rectangle(cx, 400, 360, 220, 0x1a1a3e, 0.98)
+      this.add.rectangle(cx, 400, 380, 220, 0x1a1a3e, 0.98)
         .setStrokeStyle(3, 0xffd54f),
       this.add.text(cx, 330, 'JAR FULL!', {
-        fontFamily: 'Arial Black, sans-serif', fontSize: '30px', color: '#ef5350',
+        fontFamily: FONT, fontStyle: 'bold', fontSize: '32px', color: '#ef5350',
       }).setOrigin(0.5),
     ];
 
     const saveBtn = this.add
       .text(cx, 395, '📺  SAVE ME  (clear 30%)', {
-        fontFamily: 'Arial Black, sans-serif', fontSize: '21px', color: '#80deea',
+        fontFamily: FONT, fontStyle: 'bold', fontSize: '22px', color: '#80deea',
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
     const giveUp = this.add
       .text(cx, 460, 'give up', {
-        fontFamily: 'Arial, sans-serif', fontSize: '18px', color: '#9aa7c7',
+        fontFamily: FONT, fontSize: '18px', color: '#9aa7c7',
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
     overlay.push(saveBtn, giveUp);
 
+    let settled = false;
+    const close = (rescue) => {
+      if (settled) return;
+      settled = true;
+      overlay.forEach((o) => o.destroy());
+      if (rescue) this.rescue();
+      else this.finishRun();
+    };
+
     saveBtn.once('pointerup', async () => {
       saveBtn.setText('loading ad…').disableInteractive();
       giveUp.disableInteractive();
+      // scene-side failsafe on top of the Ads-module timeout: the overlay can
+      // never strand the player (the on-device hang this replaces)
+      this.time.delayedCall(10000, () => close(false));
       const earned = await Ads.showRewarded('save');
-      overlay.forEach((o) => o.destroy());
-      if (earned) this.rescue();
-      else this.finishRun();
+      close(earned);
     });
-    giveUp.once('pointerup', () => {
-      overlay.forEach((o) => o.destroy());
-      this.finishRun();
-    });
+    giveUp.once('pointerup', () => close(false));
   }
 
   rescue() {
     this.usedSave = true;
-    // remove the highest 30% of pieces (the ones causing the overflow)
     const pieces = [...this.pieces.getChildren()].sort((a, b) => a.y - b.y);
     const toRemove = pieces.slice(0, Math.max(1, Math.ceil(pieces.length * 0.3)));
     toRemove.forEach((p) => {
@@ -383,6 +475,16 @@ export default class GameScene extends Phaser.Scene {
       Storage.setDailyBest(day, this.score);
     }
 
+    // meta progression: missions, XP/level, mystery box
+    recordRun({
+      score: this.score,
+      highestTier: this.highestTier,
+      maxChain: this.maxChain,
+      storms: this.stormsSurvived,
+    });
+    const leveled = addXp(this.score);
+    const boxEarned = boxEarnedThisRun();
+
     this.time.delayedCall(500, () =>
       this.scene.start('GameOver', {
         score: this.score,
@@ -393,6 +495,8 @@ export default class GameScene extends Phaser.Scene {
         stardustTotal,
         isDaily: this.isDaily,
         day,
+        leveled,
+        boxEarned,
       })
     );
   }

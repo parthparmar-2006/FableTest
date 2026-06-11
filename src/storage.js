@@ -64,4 +64,31 @@ export const Storage = {
 
   getMuted: () => read('jos_muted', false),
   setMuted: (v) => write('jos_muted', v),
+  getMusicOff: () => read('jos_music_off', false),
+  setMusicOff: (v) => write('jos_music_off', v),
+
+  // player level (XP = lifetime score)
+  getXp: () => read('jos_xp', 0),
+  addXp(v) {
+    const xp = read('jos_xp', 0) + v;
+    write('jos_xp', xp);
+    return xp;
+  },
+
+  // daily missions
+  getMissionProgress: (day) => read('jos_mprog_' + day, {}),
+  setMissionProgress: (day, p) => write('jos_mprog_' + day, p),
+  getMissionsClaimed: (day) => read('jos_mclaim_' + day, []),
+  claimMission(day, id) {
+    const c = read('jos_mclaim_' + day, []);
+    if (!c.includes(id)) c.push(id);
+    write('jos_mclaim_' + day, c);
+  },
+
+  // mystery box every 3rd run
+  bumpBoxCounter() {
+    const n = read('jos_box_runs', 0) + 1;
+    write('jos_box_runs', n);
+    return n;
+  },
 };
