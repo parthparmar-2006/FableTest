@@ -4,6 +4,7 @@ import { TIERS, MAX_DROP_TIER, DROP_WEIGHTS } from '../config/tiers.js';
 import { Storage, todayStr } from '../storage.js';
 import { skinById } from '../config/skins.js';
 import { Sfx } from '../sfx.js';
+import { Ads, track } from '../ads.js';
 import { sprinkleStars } from './MenuScene.js';
 
 // deterministic RNG so every player gets the same daily-challenge drop order
@@ -46,6 +47,8 @@ export default class GameScene extends Phaser.Scene {
   }
 
   create() {
+    track('run_start', this.isDaily ? 'daily' : 'classic');
+    this.usedSave = false;
     this.palette = skinById(Storage.getEquippedSkin()).palette;
     this.score = 0;
     this.merges = 0;
@@ -296,6 +299,76 @@ export default class GameScene extends Phaser.Scene {
   endGame() {
     this.gameOver = true;
     this.matter.world.setGravity(0, 1);
+
+    // one rewarded continue per run: the highest-value ad placement
+    if (!this.usedSave && Ads.rewardedAvailable()) {
+      this.offerSave();
+      return;
+    }
+    this.finishRun();
+  }
+
+  offerSave() {
+    const cx = GAME_WIDTH / 2;
+    const overlay = [
+      this.add.rectangle(cx, 400, GAME_WIDTH, GAME_HEIGHT, 0x0b0b1e, 0.75),
+      this.add.rectangle(cx, 400, 360, 220, 0x1a1a3e, 0.98)
+        .setStrokeStyle(3, 0xffd54f),
+      this.add.text(cx, 330, 'JAR FULL!', {
+        fontFamily: 'Arial Black, sans-serif', fontSize: '30px', color: '#ef5350',
+      }).setOrigin(0.5),
+    ];
+
+    const saveBtn = this.add
+      .text(cx, 395, '📺  SAVE ME  (clear 30%)', {
+        fontFamily: 'Arial Black, sans-serif', fontSize: '21px', color: '#80deea',
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    const giveUp = this.add
+      .text(cx, 460, 'give up', {
+        fontFamily: 'Arial, sans-serif', fontSize: '18px', color: '#9aa7c7',
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    overlay.push(saveBtn, giveUp);
+
+    saveBtn.once('pointerup', async () => {
+      saveBtn.setText('loading ad…').disableInteractive();
+      giveUp.disableInteractive();
+      const earned = await Ads.showRewarded('save');
+      overlay.forEach((o) => o.destroy());
+      if (earned) this.rescue();
+      else this.finishRun();
+    });
+    giveUp.once('pointerup', () => {
+      overlay.forEach((o) => o.destroy());
+      this.finishRun();
+    });
+  }
+
+  rescue() {
+    this.usedSave = true;
+    // remove the highest 30% of pieces (the ones causing the overflow)
+    const pieces = [...this.pieces.getChildren()].sort((a, b) => a.y - b.y);
+    const toRemove = pieces.slice(0, Math.max(1, Math.ceil(pieces.length * 0.3)));
+    toRemove.forEach((p) => {
+      this.juice(p.x, p.y, p.getData('tier'));
+      p.getData('ring')?.destroy();
+      p.destroy();
+    });
+    Sfx.reward();
+    this.dangerTimer = 0;
+    this.gameOver = false;
+    if (!this.held && this.canDrop === false) {
+      this.canDrop = true;
+      this.spawnHeldPiece();
+    }
+  }
+
+  finishRun() {
+    this.gameOver = true;
+    track('run_end', this.isDaily ? 'daily' : 'classic');
     this.cameras.main.flash(400, 239, 83, 80);
     Sfx.over();
 

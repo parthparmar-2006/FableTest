@@ -1,0 +1,8 @@
+{
+  "appId": "com.jarofstars.game",
+  "appName": "Jar of Stars",
+  "webDir": "dist",
+  "android": {
+    "backgroundColor": "#0b0b1e"
+  }
+}
