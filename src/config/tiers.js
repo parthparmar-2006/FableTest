@@ -24,5 +24,7 @@ export const DROP_STAGES = [
   [4, 4, 3, 3, 2],
   [3, 3, 4, 3, 3],
   [2, 3, 4, 4, 3],
+  [1, 2, 3, 5, 4],
+  [0, 2, 3, 5, 5],
 ];
-export const ESCALATION_DROPS = 15;
+export const ESCALATION_DROPS = 10;

@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { GAME_WIDTH, FONT } from '../constants.js';
 import { TIERS } from '../config/tiers.js';
+import { SKINS } from '../config/skins.js';
 import { Storage } from '../storage.js';
 import { Ads } from '../ads.js';
 import { Sfx } from '../sfx.js';
@@ -57,11 +58,38 @@ export default class GameOverScene extends Phaser.Scene {
 
     const biggest = TIERS[data.highestTier];
     this.add.image(GAME_WIDTH / 2, 340, biggest.key).setScale(0.55);
+    const statBits = [`Biggest: ${biggest.name}`];
+    if (data.maxChain >= 2) statBits.push(`chain x${data.maxChain}`);
+    if (data.storms > 0) statBits.push(`${data.storms}⛈`);
+    if (data.goals > 0) statBits.push(`${data.goals}🎯`);
     this.add
-      .text(GAME_WIDTH / 2, 398, `Biggest: ${biggest.name}`, {
+      .text(GAME_WIDTH / 2, 398, statBits.join(' · '), {
         fontFamily: FONT, fontSize: '16px', color: '#cfd8ff',
       })
       .setOrigin(0.5);
+
+    // "one more run" hook: how close the next skin is
+    const dust = Storage.getStardust();
+    const nextSkin = SKINS.filter(
+      (s) => !Storage.getOwnedSkins().includes(s.id)
+    ).sort((a, b) => a.cost - b.cost)[0];
+    if (nextSkin) {
+      const pct = Math.min(1, dust / nextSkin.cost);
+      const missing = Math.max(0, nextSkin.cost - dust);
+      const y = 470;
+      this.add
+        .text(GAME_WIDTH / 2, y - 14,
+          missing === 0
+            ? `🎨 ${nextSkin.name} is UNLOCKABLE in the Collection!`
+            : `🎨 ${nextSkin.name}: ${missing} ✦ to go`,
+          { fontFamily: FONT, fontSize: '14px', color: missing === 0 ? '#ffd54f' : '#9aa7c7' })
+        .setOrigin(0.5);
+      this.add.rectangle(GAME_WIDTH / 2, y + 4, 220, 8, 0x1a1a3e)
+        .setStrokeStyle(1, 0x4a5580);
+      this.add
+        .rectangle(GAME_WIDTH / 2 - 110 + 1, y + 4, Math.max(3, 218 * pct), 6, 0xffd54f)
+        .setOrigin(0, 0.5);
+    }
 
     const dustText = this.add
       .text(
@@ -91,16 +119,16 @@ export default class GameOverScene extends Phaser.Scene {
       Sfx.fanfare();
       const lvl = this.add
         .text(
-          GAME_WIDTH / 2, 482,
+          GAME_WIDTH / 2, 505,
           `🎉 LEVEL ${data.leveled.level}!  +${data.leveled.bonus} ✦`,
-          { fontFamily: FONT, fontStyle: 'bold', fontSize: '24px', color: '#ce93d8' }
+          { fontFamily: FONT, fontStyle: 'bold', fontSize: '20px', color: '#ce93d8' }
         )
         .setOrigin(0.5)
         .setScale(0.3);
       this.tweens.add({
         targets: lvl, scale: 1, duration: 500, ease: 'Back.easeOut',
       });
-      const confetti = this.add.particles(GAME_WIDTH / 2, 482, 'dot', {
+      const confetti = this.add.particles(GAME_WIDTH / 2, 505, 'dot', {
         speed: { min: 100, max: 300 },
         scale: { start: 0.8, end: 0 },
         lifespan: 900,
@@ -148,7 +176,7 @@ export default class GameOverScene extends Phaser.Scene {
   }
 
   drawBox() {
-    const y = 530;
+    const y = 548;
     const box = makeButton(
       this, GAME_WIDTH / 2, y, '📦 OPEN MYSTERY BOX', '#ffd54f', '19px',
       () => {
