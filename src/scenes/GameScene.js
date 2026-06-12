@@ -114,6 +114,43 @@ export default class GameScene extends Phaser.Scene {
     Music.start();
     Music.setIntensity(1);
     Ads.preloadRewarded();
+
+    // per-run discovery celebrations
+    this.discovered = new Set();
+
+    // first-run onboarding hint
+    if (!Storage.getSeenHint()) {
+      this.hint = this.add
+        .text(GAME_WIDTH / 2, 168, '← drag to aim · release to drop →', {
+          fontFamily: FONT, fontSize: '17px', color: '#cfd8ff',
+        })
+        .setOrigin(0.5);
+      this.tweens.add({
+        targets: this.hint, alpha: 0.4, duration: 600, yoyo: true, repeat: -1,
+      });
+    }
+  }
+
+  /** dashed guide from the held piece down to its predicted landing spot */
+  updateGuide() {
+    this.guide.clear();
+    if (!this.held || this.gameOver) return;
+    const hx = this.held.x;
+    const hr = TIERS[this.currentSpecial === 'bomb' ? 2 : this.currentTier].radius;
+    let landY = JAR.floor - hr;
+    for (const p of this.pieces.getChildren()) {
+      if (!p.active) continue;
+      const pr = TIERS[p.getData('tier') ?? 0].radius;
+      if (Math.abs(p.x - hx) < (hr + pr) * 0.9) {
+        landY = Math.min(landY, p.y - pr - hr);
+      }
+    }
+    this.guide.lineStyle(2, 0xffffff, 0.18);
+    for (let y = DROP_Y + hr + 8; y < landY - 6; y += 18) {
+      this.guide.lineBetween(hx, y, hx, Math.min(y + 9, landY - 6));
+    }
+    this.guide.lineStyle(2, 0xffffff, 0.22);
+    this.guide.strokeCircle(hx, landY, hr);
   }
 
   buildHud() {
@@ -219,6 +256,13 @@ export default class GameScene extends Phaser.Scene {
       JAR.left - JAR.wall, JAR.top, JAR.right - JAR.left + JAR.wall * 2,
       JAR.floor - JAR.top + JAR.wall
     );
+    // glass shine streaks
+    g.lineStyle(5, 0xffffff, 0.07);
+    g.lineBetween(JAR.left + 14, JAR.top + 30, JAR.left + 14, JAR.floor - 30);
+    g.lineStyle(2, 0xffffff, 0.05);
+    g.lineBetween(JAR.right - 18, JAR.top + 60, JAR.right - 18, JAR.floor - 60);
+    // aim guide redrawn every frame while a piece is held
+    this.guide = this.add.graphics();
     this.dangerLine = this.add.graphics();
     this.dangerLine.lineStyle(3, 0xef5350, 1);
     for (let dx = JAR.left; dx < JAR.right; dx += 24) {
@@ -323,6 +367,15 @@ export default class GameScene extends Phaser.Scene {
     this.held = null;
     this.canDrop = false;
     this.dropCount++;
+    if (this.hint) {
+      Storage.setSeenHint();
+      const h = this.hint;
+      this.hint = null;
+      this.tweens.killTweensOf(h); // the pulse tween would fight the fade
+      this.tweens.add({
+        targets: h, alpha: 0, duration: 400, onComplete: () => h.destroy(),
+      });
+    }
     const stage = Math.min(
       DROP_STAGES.length - 1, Math.floor(this.dropCount / ESCALATION_DROPS)
     );
@@ -349,6 +402,7 @@ export default class GameScene extends Phaser.Scene {
     piece.setData('tier', special === 'prism' ? 0 : tier);
     piece.setData('special', special);
     piece.setData('bornAt', this.time.now);
+    piece.setData('texKey', t.key);
     if (special) this.decorateSpecial(piece, special);
     if (bodyTier === 6 && !special) {
       const ring = this.add.image(x, y, 'ring');
@@ -531,6 +585,27 @@ export default class GameScene extends Phaser.Scene {
     vibrate(next >= 6 ? 30 : 10);
     this.juice(nx, ny, next);
     if (this.chainCount >= 2) this.showChain(this.chainCount);
+
+    // discovery moment: first time this run reaching a notable tier
+    if (next >= 4 && !this.discovered.has(next)) {
+      this.discovered.add(next);
+      const banner = this.add
+        .text(GAME_WIDTH / 2, 200, `✨ ${TIERS[next].name.toUpperCase()}! ✨`, {
+          fontFamily: FONT, fontStyle: 'bold', fontSize: '30px',
+          color: '#' + this.palette[next].toString(16).padStart(6, '0'),
+          stroke: '#0b0b1e', strokeThickness: 6,
+        })
+        .setOrigin(0.5)
+        .setScale(0.3);
+      this.tweens.add({
+        targets: banner, scale: 1, duration: 350, ease: 'Back.easeOut',
+      });
+      this.tweens.add({
+        targets: banner, alpha: 0, delay: 1400, duration: 400,
+        onComplete: () => banner.destroy(),
+      });
+      if (next >= 6) Sfx.fanfare();
+    }
 
     // big-merge time stop: the "OHHH" moment
     if (next >= 6) {
@@ -845,17 +920,27 @@ export default class GameScene extends Phaser.Scene {
     this.feverBar.setSize(10, barH);
     this.feverBar.setFillStyle(this.fever >= 100 || this.feverActive ? 0xffd54f : 0xce93d8);
 
-    // prism rainbow tint cycle
+    // prism rainbow tint cycle + idle blinking + follower sync
     for (const p of this.pieces.getChildren()) {
+      if (!p.active) continue;
       if (p.getData?.('special') === 'prism') {
         const hue = (this.time.now / 4) % 360;
         p.setTint(Phaser.Display.Color.HSLToColor(hue / 360, 0.8, 0.75).color);
+      }
+      const blinkUntil = p.getData('blinkUntil');
+      if (blinkUntil && this.time.now > blinkUntil) {
+        p.setTexture(p.getData('texKey'));
+        p.setData('blinkUntil', null);
+      } else if (!blinkUntil && Math.random() < dt * 0.25) {
+        p.setTexture(p.getData('texKey') + 'b');
+        p.setData('blinkUntil', this.time.now + 140);
       }
       const badge = p.getData?.('badge');
       if (badge) badge.setPosition(p.x, p.y);
       const ring = p.getData?.('ring');
       if (ring) ring.setPosition(p.x, p.y).setRotation(p.rotation);
     }
+    this.updateGuide();
     if (this.held?.getData?.('prismTint') || this.currentSpecial === 'prism') {
       const hue = (this.time.now / 4) % 360;
       this.held?.setTint(Phaser.Display.Color.HSLToColor(hue / 360, 0.8, 0.75).color);
@@ -979,6 +1064,7 @@ export default class GameScene extends Phaser.Scene {
     const best = Storage.getBest();
     const isNewBest = this.score > best;
     if (isNewBest) Storage.setBest(this.score);
+    Storage.recordScore(this.score);
     const stardust = Math.floor(this.score / 10);
     const stardustTotal = Storage.addStardust(stardust);
 

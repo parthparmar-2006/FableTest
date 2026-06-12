@@ -58,11 +58,19 @@ export default class MenuScene extends Phaser.Scene {
     const streak = Storage.getStreak();
     this.add
       .text(
-        GAME_WIDTH / 2, 272,
+        GAME_WIDTH / 2, 268,
         `Best ${Storage.getBest()}   ✦ ${Storage.getStardust()}   🔥 ${streak.count}`,
         { fontFamily: FONT, fontSize: '19px', color: '#ffffff' }
       )
       .setOrigin(0.5);
+    const top = Storage.getTopScores();
+    if (top.length > 1) {
+      this.add
+        .text(GAME_WIDTH / 2, 294, `Top runs: ${top.join(' · ')}`, {
+          fontFamily: FONT, fontSize: '13px', color: '#9aa7c7',
+        })
+        .setOrigin(0.5);
+    }
 
     makeButton(this, GAME_WIDTH / 2, 340, 'PLAY', '#80deea', '30px', () =>
       this.scene.start('Game', { daily: false })
@@ -264,6 +272,7 @@ export function makeButton(scene, x, y, label, color, size, onUp) {
 }
 
 export function sprinkleStars(scene) {
+  scene.add.image(GAME_WIDTH / 2, GAME_HEIGHT / 2, 'bg');
   for (let i = 0; i < 60; i++) {
     scene.add
       .image(

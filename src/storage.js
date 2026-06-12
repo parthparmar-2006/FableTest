@@ -91,4 +91,17 @@ export const Storage = {
     write('jos_box_runs', n);
     return n;
   },
+
+  // local top-5 run scores
+  getTopScores: () => read('jos_top', []),
+  recordScore(v) {
+    if (v <= 0) return;
+    const top = read('jos_top', []);
+    top.push(v);
+    top.sort((a, b) => b - a);
+    write('jos_top', top.slice(0, 5));
+  },
+
+  getSeenHint: () => read('jos_hint', false),
+  setSeenHint: () => write('jos_hint', true),
 };
