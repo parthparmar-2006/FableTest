@@ -6,6 +6,8 @@ import { Storage } from '../storage.js';
 import { Ads } from '../ads.js';
 import { Sfx } from '../sfx.js';
 import { openBox } from '../progression.js';
+import { shareScoreCard } from '../sharecard.js';
+import { skinById } from '../config/skins.js';
 import { sprinkleStars, makeButton } from './MenuScene.js';
 
 export default class GameOverScene extends Phaser.Scene {
@@ -17,15 +19,18 @@ export default class GameOverScene extends Phaser.Scene {
     sprinkleStars(this);
 
     this.add
-      .text(GAME_WIDTH / 2, 80, 'JAR OVERFLOWED!', {
-        fontFamily: FONT, fontStyle: 'bold', fontSize: '36px', color: '#ef5350',
+      .text(GAME_WIDTH / 2, 80, data.timeUp ? "⚡ TIME'S UP!" : 'JAR OVERFLOWED!', {
+        fontFamily: FONT, fontStyle: 'bold', fontSize: '36px',
+        color: data.timeUp ? '#ffd54f' : '#ef5350',
       })
       .setOrigin(0.5);
-    if (data.isDaily) {
+    if (data.isDaily || data.isRush) {
       this.add
-        .text(GAME_WIDTH / 2, 120, `DAILY CHALLENGE · ${data.day}`, {
-          fontFamily: FONT, fontSize: '16px', color: '#ffd54f',
-        })
+        .text(
+          GAME_WIDTH / 2, 120,
+          data.isRush ? 'RUSH · 90 seconds' : `DAILY CHALLENGE · ${data.day}`,
+          { fontFamily: FONT, fontSize: '16px', color: '#ffd54f' }
+        )
         .setOrigin(0.5);
     }
 
@@ -142,27 +147,51 @@ export default class GameOverScene extends Phaser.Scene {
     if (data.boxEarned) this.drawBox();
 
     const shareBtn = makeButton(
-      this, GAME_WIDTH / 2, 590, '📋 COPY SCORE', '#ce93d8', '16px',
+      this, GAME_WIDTH / 2, 590, '📤 SHARE', '#ce93d8', '16px',
       async () => {
+        const tierHex =
+          '#' + skinById(Storage.getEquippedSkin())
+            .palette[data.highestTier].toString(16).padStart(6, '0');
+        try {
+          // native share sheet with a rendered score-card image (Android);
+          // falls back to clipboard text on desktop/web
+          const shared = await shareScoreCard({
+            score: data.score,
+            best: data.best,
+            tierName: biggest.name,
+            tierColor: tierHex,
+            nearMiss,
+            mode: data.isRush ? 'RUSH MODE' : data.isDaily ? `DAILY ${data.day}` : '',
+          });
+          if (shared) {
+            shareBtn.setText('✓ SHARED!');
+            return;
+          }
+        } catch {
+          // user cancelled the share sheet or share unsupported — fall through
+        }
         const ladder =
           '🌟'.repeat(data.highestTier + 1) + '⬛'.repeat(tiersFromSun);
-        const tag = data.isDaily ? ` Daily ${data.day}` : '';
-        const text = `Jar of Stars${tag} — ${data.score} pts\n${ladder}\n${nearMiss}`;
+        const tag = data.isRush ? ' Rush' : data.isDaily ? ` Daily ${data.day}` : '';
+        const text =
+          `Jar of Stars${tag} — ${data.score} pts\n${ladder}\n${nearMiss}\n` +
+          'play: parthparmar06.itch.io/jar-of-stars';
         try {
           await navigator.clipboard.writeText(text);
           shareBtn.setText('✓ COPIED!');
         } catch {
-          shareBtn.setText('(copy blocked)');
+          shareBtn.setText('(share blocked)');
         }
       }
     );
 
     const retry = makeButton(
       this, GAME_WIDTH / 2, 660,
-      data.isDaily ? 'RETRY DAILY' : 'ONE MORE TRY', '#80deea', '26px',
+      data.isRush ? 'RETRY RUSH' : data.isDaily ? 'RETRY DAILY' : 'ONE MORE TRY',
+      '#80deea', '26px',
       async () => {
         await Ads.maybeShowInterstitial();
-        this.scene.start('Game', { daily: data.isDaily });
+        this.scene.start('Game', { daily: data.isDaily, rush: data.isRush });
       }
     );
     this.tweens.add({

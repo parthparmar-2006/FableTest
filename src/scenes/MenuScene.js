@@ -72,26 +72,31 @@ export default class MenuScene extends Phaser.Scene {
         .setOrigin(0.5);
     }
 
-    makeButton(this, GAME_WIDTH / 2, 340, 'PLAY', '#80deea', '30px', () =>
-      this.scene.start('Game', { daily: false })
+    // data must be explicit: Phaser reuses stale scene data on start()
+    makeButton(this, GAME_WIDTH / 2, 332, 'PLAY', '#80deea', '28px', () =>
+      this.scene.start('Game', { daily: false, rush: false })
+    );
+
+    makeButton(this, GAME_WIDTH / 2, 394, '⚡ RUSH · 90s', '#ff7043', '20px', () =>
+      this.scene.start('Game', { daily: false, rush: true })
     );
 
     const day = todayStr();
     const dailyBest = Storage.getDailyBest(day);
     makeButton(
-      this, GAME_WIDTH / 2, 410,
+      this, GAME_WIDTH / 2, 452,
       dailyBest > 0 ? `DAILY CHALLENGE (best ${dailyBest})` : 'DAILY CHALLENGE',
-      '#ffd54f', '20px',
-      () => this.scene.start('Game', { daily: true })
+      '#ffd54f', '19px',
+      () => this.scene.start('Game', { daily: true, rush: false })
     );
 
     const collBtn = makeButton(
-      this, GAME_WIDTH / 2, 472, 'COLLECTION', '#ce93d8', '20px',
+      this, GAME_WIDTH / 2, 508, 'COLLECTION', '#ce93d8', '19px',
       () => this.scene.start('Album')
     );
     if (affordableSkinExists()) {
       const badge = this.add
-        .text(GAME_WIDTH / 2 + 95, 455, 'NEW!', {
+        .text(GAME_WIDTH / 2 + 95, 492, 'NEW!', {
           fontFamily: FONT, fontStyle: 'bold', fontSize: '14px', color: '#ef5350',
         })
         .setOrigin(0.5)
@@ -137,7 +142,7 @@ export default class MenuScene extends Phaser.Scene {
   }
 
   drawMissions() {
-    const top = 530;
+    const top = 548;
     this.add
       .text(GAME_WIDTH / 2, top, '— DAILY MISSIONS —', {
         fontFamily: FONT, fontStyle: 'bold', fontSize: '16px', color: '#9aa7c7',

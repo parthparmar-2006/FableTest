@@ -32,6 +32,7 @@ export default class GameScene extends Phaser.Scene {
 
   init(data) {
     this.isDaily = !!data?.daily;
+    this.isRush = !!data?.rush;
     this.rand = this.isDaily ? mulberry32(daySeed(todayStr())) : Math.random;
   }
 
@@ -131,6 +132,53 @@ export default class GameScene extends Phaser.Scene {
     }
   }
 
+  togglePause() {
+    if (this.gameOver) return;
+    this.paused = !this.paused;
+    if (this.paused) {
+      this.matter.world.pause();
+      this.tweens.pauseAll();
+      this.time.paused = true;
+      Sfx.ui();
+      this.pauseUi = [
+        this.add.rectangle(GAME_WIDTH / 2, 400, GAME_WIDTH, GAME_HEIGHT, 0x0b0b1e, 0.8),
+        this.add.text(GAME_WIDTH / 2, 300, 'PAUSED', {
+          fontFamily: FONT, fontStyle: 'bold', fontSize: '40px', color: '#80deea',
+        }).setOrigin(0.5),
+      ];
+      const mk = (y, label, color, fn) => {
+        const t = this.add
+          .text(GAME_WIDTH / 2, y, label, {
+            fontFamily: FONT, fontStyle: 'bold', fontSize: '24px', color,
+          })
+          .setOrigin(0.5)
+          .setInteractive({ useHandCursor: true });
+        t.on('pointerup', fn);
+        this.pauseUi.push(t);
+      };
+      mk(390, '▶ RESUME', '#ffffff', () => this.togglePause());
+      mk(455, '↻ RESTART', '#ffd54f', () => {
+        this.time.paused = false;
+        this.scene.restart({ daily: this.isDaily, rush: this.isRush });
+      });
+      mk(520, 'MENU', '#9aa7c7', () => {
+        this.time.paused = false;
+        this.scene.start('Menu');
+      });
+      mk(585, Sfx.isMuted() ? '🔇 sound off' : '🔊 sound on', '#9aa7c7', () => {
+        Sfx.toggleMute();
+        this.togglePause();
+        this.togglePause(); // rebuild overlay with fresh labels
+      });
+    } else {
+      this.matter.world.resume();
+      this.tweens.resumeAll();
+      this.time.paused = false;
+      this.pauseUi?.forEach((o) => o.destroy());
+      this.pauseUi = null;
+    }
+  }
+
   /** dashed guide from the held piece down to its predicted landing spot */
   updateGuide() {
     this.guide.clear();
@@ -177,6 +225,31 @@ export default class GameScene extends Phaser.Scene {
         })
         .setOrigin(0.5);
     }
+    if (this.isRush) {
+      this.rushT = 90;
+      this.rushText = this.add
+        .text(GAME_WIDTH / 2, 16, '⚡ 90', {
+          fontFamily: FONT, fontStyle: 'bold', fontSize: '22px', color: '#ffd54f',
+        })
+        .setOrigin(0.5);
+    }
+
+    // pause
+    this.paused = false;
+    const pauseBtn = this.add
+      .text(GAME_WIDTH - 40, 108, '⏸', { fontSize: '26px' })
+      .setOrigin(0.5)
+      .setAlpha(0.6)
+      .setInteractive({ useHandCursor: true });
+    pauseBtn.on('pointerdown', (p, x, y, e) => {
+      e?.stopPropagation?.();
+      this.togglePause();
+    });
+
+    // rising-pile threat glow along the top of the jar
+    this.threatGlow = this.add
+      .rectangle(GAME_WIDTH / 2, JAR.top + 30, JAR.right - JAR.left, 60, 0xef5350, 0)
+      .setOrigin(0.5, 0.5);
     this.chainText = this.add
       .text(GAME_WIDTH / 2, 300, '', {
         fontFamily: FONT, fontStyle: 'bold', fontSize: '36px', color: '#ffd54f',
@@ -274,9 +347,10 @@ export default class GameScene extends Phaser.Scene {
   /* ----------------------------- drops ----------------------------- */
 
   escalationStage() {
+    const per = this.isRush ? 8 : ESCALATION_DROPS;
     const stage = Math.min(
       DROP_STAGES.length - 1,
-      Math.floor(this.dropCount / ESCALATION_DROPS)
+      Math.floor(this.dropCount / per)
     );
     // fever gives smaller pieces: relief inside the rush
     return this.feverActive ? Math.max(0, stage - 1) : stage;
@@ -899,8 +973,27 @@ export default class GameScene extends Phaser.Scene {
   /* ----------------------------- update ----------------------------- */
 
   update(_, deltaMs) {
-    if (this.gameOver) return;
+    if (this.gameOver || this.paused) return;
     const dt = deltaMs / 1000;
+
+    // rush mode countdown
+    if (this.isRush) {
+      this.rushT -= dt;
+      const s = Math.max(0, Math.ceil(this.rushT));
+      this.rushText.setText(`⚡ ${s}`);
+      if (this.rushT <= 10 && this.rushText.style.color !== '#ef5350') {
+        this.rushText.setColor('#ef5350');
+      }
+      if (this.rushT <= 10 && s !== this.lastTick) {
+        this.lastTick = s;
+        Sfx.ui();
+      }
+      if (this.rushT <= 0) {
+        this.timeUp = true;
+        this.finishRun();
+        return;
+      }
+    }
 
     this.updateStorm(dt);
 
@@ -947,14 +1040,19 @@ export default class GameScene extends Phaser.Scene {
     }
     this.heldBadge?.setPosition(this.held?.x ?? 0, DROP_Y);
 
-    // danger check + vignette
+    // danger check + vignette + threat glow
     let inDanger = false;
+    let pileTop = JAR.floor;
     for (const piece of this.pieces.getChildren()) {
       if (!piece.active || !piece.body) continue;
       const r = TIERS[piece.getData('tier') ?? 0].radius;
       const settled = this.time.now - piece.getData('bornAt') > 1000;
+      if (settled && piece.body.speed < 1.2) pileTop = Math.min(pileTop, piece.y - r);
       if (settled && piece.y - r < JAR.top && piece.body.speed < 1.2) inDanger = true;
     }
+    // glow ramps up over the last 35% of jar height
+    const frac = 1 - (pileTop - JAR.top) / (JAR.floor - JAR.top);
+    this.threatGlow.setFillStyle(0xef5350, Math.max(0, (frac - 0.65) / 0.35) * 0.16);
     if (inDanger) {
       this.dangerTimer += dt;
       const pulse = 0.25 + 0.3 * Math.abs(Math.sin(this.time.now / 120));
@@ -1090,6 +1188,8 @@ export default class GameScene extends Phaser.Scene {
         stardust,
         stardustTotal,
         isDaily: this.isDaily,
+        isRush: this.isRush,
+        timeUp: !!this.timeUp,
         day,
         leveled,
         boxEarned,
