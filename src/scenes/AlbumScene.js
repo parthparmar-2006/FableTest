@@ -7,7 +7,7 @@ import { generateTextures } from '../textures.js';
 import { sprinkleStars, makeButton } from './MenuScene.js';
 
 const CARD_W = 200;
-const CARD_H = 96;
+const CARD_H = 88;
 
 export default class AlbumScene extends Phaser.Scene {
   constructor() {
@@ -40,7 +40,7 @@ export default class AlbumScene extends Phaser.Scene {
       const row = Math.floor(i / 2);
       this.drawCard(
         130 + col * 220,
-        190 + row * 110,
+        178 + row * 100,
         skin
       );
     });

@@ -52,6 +52,16 @@ export const SKINS = [
     palette: [0xd1c4e9, 0xb39ddb, 0x9575cd, 0x7e57c2, 0x673ab7,
               0x5e35b1, 0x512da8, 0x4527a0, 0xffd700, 0xffecb3],
   },
+  {
+    id: 'aurora', name: 'Aurora', cost: 3000,
+    palette: [0xc8ffe0, 0x9cffd0, 0x6effc2, 0x4de8c2, 0x3ad1d4,
+              0x38b6e8, 0x4a90f0, 0x7a6ff0, 0xb35cf0, 0xff5cd0],
+  },
+  {
+    id: 'galaxy', name: 'Galaxy Core', cost: 5000,
+    palette: [0xe6e6fa, 0xc4b8f0, 0xa08ce8, 0x7d63e0, 0x5a3dd8,
+              0x4527a0, 0x311b92, 0x1a0e6e, 0xff6ec7, 0xfff176],
+  },
 ];
 
 export function skinById(id) {

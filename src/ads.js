@@ -31,6 +31,7 @@ const state = {
   lastRewardedAt: 0,
   native: false,
   admob: null,
+  cg: null,
   rewardedReady: false,
   rewardEarned: false,
 };
@@ -49,7 +50,7 @@ function withTimeout(promise, ms = AD_TIMEOUT_MS) {
 async function initNative() {
   // Capacitor is only present in the wrapped Android app
   const cap = window.Capacitor;
-  if (!cap?.isNativePlatform?.()) return;
+  if (!cap?.isNativePlatform?.()) return initCrazyGames();
   try {
     const mod = await import('@capacitor-community/admob');
     const AdMob = mod.AdMob;
@@ -74,6 +75,43 @@ async function initNative() {
 }
 initNative();
 
+// CrazyGames web SDK: loaded only on their domain, everything defensive —
+// the game must run identically when the SDK is absent or its API shifts.
+function initCrazyGames() {
+  try {
+    if (!/crazygames\./.test(location.hostname)) return;
+    const s = document.createElement('script');
+    s.src = 'https://sdk.crazygames.com/crazygames-sdk-v3.js';
+    s.onload = async () => {
+      try {
+        await window.CrazyGames?.SDK?.init?.();
+        state.cg = window.CrazyGames?.SDK ?? null;
+        track('cg_sdk_ready');
+      } catch {
+        state.cg = null;
+      }
+    };
+    document.head.appendChild(s);
+  } catch {
+    /* never break the game over an ad SDK */
+  }
+}
+
+function cgRequestAd(type) {
+  // resolves true when the ad completed (rewarded earned / midgame finished)
+  return new Promise((resolve) => {
+    try {
+      state.cg.ad.requestAd(type, {
+        adFinished: () => resolve(true),
+        adError: () => resolve(false),
+        adStarted: () => {},
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 function interstitialAllowed() {
   const now = Date.now();
   return (
@@ -88,7 +126,17 @@ export const Ads = {
   /** Natural-break interstitial (between runs). Resolves immediately when pacing blocks it. */
   async maybeShowInterstitial() {
     if (!interstitialAllowed()) return false;
-    if (!state.native) return false; // web build: no interstitials at all
+    if (state.cg) {
+      // CrazyGames midgame ad, same pacing rules
+      const ok = await withTimeout(cgRequestAd('midgame'), AD_TIMEOUT_MS * 2);
+      if (ok === true) {
+        state.lastInterstitialAt = Date.now();
+        state.interstitialCount += 1;
+        track('ad_interstitial', 'cg');
+      }
+      return ok === true;
+    }
+    if (!state.native) return false; // plain web build: no interstitials at all
     try {
       const r1 = await withTimeout(
         state.admob.prepareInterstitial({ adId: TEST_UNITS.interstitial })
@@ -143,7 +191,17 @@ export const Ads = {
         return false;
       }
     }
-    // web stub: short fake delay, always grants (portal SDK replaces this)
+    if (state.cg) {
+      const earned = await withTimeout(cgRequestAd('rewarded'), AD_TIMEOUT_MS * 4);
+      if (earned === true) {
+        state.lastRewardedAt = Date.now();
+        track('ad_rewarded_earned', placement + ':cg');
+        return true;
+      }
+      track('ad_rewarded_abandoned', placement + ':cg');
+      return false;
+    }
+    // plain web stub: short fake delay, always grants
     await new Promise((r) => setTimeout(r, 800));
     state.lastRewardedAt = Date.now();
     track('ad_rewarded_earned', placement);
